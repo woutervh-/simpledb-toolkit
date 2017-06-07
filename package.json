@@ -1,0 +1,25 @@
+{
+  "name": "simpledb-toolkit",
+  "version": "0.1.0",
+  "description": "",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "rimraf lib && babel src -d lib",
+    "test": "babel-node test/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/woutervh-/simpledb-toolkit.git"
+  },
+  "author": "Wouter van Heeswijk",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/woutervh-/simpledb-toolkit/issues"
+  },
+  "homepage": "https://github.com/woutervh-/simpledb-toolkit#readme",
+  "devDependencies": {
+    "babel-cli": "^6.24.1",
+    "babel-preset-env": "^1.5.1",
+    "rimraf": "^2.6.1"
+  }
+}

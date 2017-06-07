@@ -1,0 +1,8 @@
+# Dependencies
+node_modules/
+
+# Compile output
+lib/
+
+# Log file
+*.log
