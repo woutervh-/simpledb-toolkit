@@ -4,6 +4,63 @@ const randomDelay = (fn) => new Promise((resolve) => {
     setTimeout(() => resolve(fn()), Math.random() * 50 + 50);
 });
 
+export class SimpleDbAtomicCounter {
+    constructor(id, {initialValue = 0, domain}) {
+        this.domain = domain;
+        this.itemName = `simpledb-toolkit-counter-${id}`;
+        this.simpleDbInstance = new AWS.SimpleDB();
+
+        this.ensureCounterExists = this.simpleDbInstance.putAttributes({
+            DomainName: domain,
+            ItemName: this.itemName,
+            Attributes: [
+                {Name: 'counter', Value: initialValue.toString(10), Replace: false}
+            ],
+            Expected: {Exists: false, Name: 'counter'}
+        }).promise().catch((error) => {
+            if (error.code !== 'ConditionalCheckFailed') {
+                throw error;
+            }
+        });
+    }
+
+    add(amount, {maxTries = 10}) {
+        let tries = 0;
+
+        const retry = () => {
+            if (maxTries >= 1 && (tries++ >= maxTries)) {
+                throw {error: 'Increment failed', reason: 'Maximum number of tries exceeded'};
+            }
+
+            return this.simpleDbInstance.getAttributes({
+                DomainName: this.domain,
+                ItemName: this.itemName,
+                AttributeNames: ['counter']
+            }).promise().then((data) => {
+                const counter = parseInt(data.Attributes[0].Value, 10);
+                return this.simpleDbInstance.putAttributes({
+                    DomainName: this.domain,
+                    ItemName: this.itemName,
+                    Attributes: [
+                        {Name: 'counter', Value: (counter + amount).toString(10), Replace: true}
+                    ],
+                    Expected: {Exists: true, Name: 'counter', Value: counter.toString(10)}
+                }).promise().then(() => ({oldValue: counter, newValue: counter + amount}));
+            }).catch(() => randomDelay(retry));
+        };
+
+        return this.ensureCounterExists.then(() => retry());
+    }
+
+    increment({maxTries = 10}) {
+        return this.add(1, {maxTries});
+    }
+
+    decrement({maxTries = 10}) {
+        return this.add(-1, {maxTries});
+    }
+}
+
 export class SimpleDbMutex {
     constructor(id, {domain}) {
         this.domain = domain;
@@ -100,19 +157,10 @@ export class SimpleDbMutex {
 }
 
 export class SimpleDbReadersWriterLock {
-    constructor(id, timeout, domain) {
-        this.id = id;
+    constructor(id, {timeout, domain}) {
         this.timeout = timeout;
-        this.domain = domain;
-
-        const createReadLock = simpleDb.putAttributes({
-            DomainName: domain,
-            ItemName: `simpledb-toolkit-read-lock-${id}`,
-            Attributes: [{Name: 'value', Value: '0', Replace: false}],
-            Expected: {Exists: false, Name: 'value'}
-        }).promise();
-
-        const createGlobalLock = simpleDb.putAttributes();
+        this.readLock = new SimpleDbMutex(`read-lock-${id}`, {domain});
+        this.globalLock = new SimpleDbMutex(`write-lock-${id}`, {domain});
     }
 
     beginRead() {
