@@ -1,7 +1,7 @@
 import AWS from 'aws-sdk';
 
-const randomDelay = (fn) => new Promise((resolve) => {
-    setTimeout(() => resolve(fn()), Math.random() * 50 + 50);
+const exponentialBackoffDelay = (fn, tries, initial = 10) => new Promise((resolve) => {
+    setTimeout(() => resolve(fn()), (1 + Math.random()) * initial * (2 ** tries));
 });
 
 export class SimpleDbAtomicCounter {
@@ -24,11 +24,11 @@ export class SimpleDbAtomicCounter {
         });
     }
 
-    add(amount, {maxTries = 10}) {
+    add(amount, {maxTries = 10} = {}) {
         let tries = 0;
 
         const retry = () => {
-            if (maxTries >= 1 && (tries++ >= maxTries)) {
+            if ((tries++ >= maxTries) && maxTries >= 1) {
                 throw {error: 'Increment failed', reason: 'Maximum number of tries exceeded'};
             }
 
@@ -46,17 +46,37 @@ export class SimpleDbAtomicCounter {
                     ],
                     Expected: {Exists: true, Name: 'counter', Value: counter.toString(10)}
                 }).promise().then(() => ({oldValue: counter, newValue: counter + amount}));
-            }).catch(() => randomDelay(retry));
+            }).catch(() => exponentialBackoffDelay(retry, tries));
         };
 
         return this.ensureCounterExists.then(() => retry());
     }
 
-    increment({maxTries = 10}) {
+    get({maxTries = 10} = {}) {
+        let tries = 0;
+
+        const retry = () => {
+            if ((tries++ >= maxTries) && maxTries >= 1) {
+                throw {error: 'Increment failed', reason: 'Maximum number of tries exceeded'};
+            }
+
+            return this.simpleDbInstance.getAttributes({
+                DomainName: this.domain,
+                ItemName: this.itemName,
+                AttributeNames: ['counter']
+            }).promise().then((data) => {
+                return parseInt(data.Attributes[0].Value, 10);
+            }).catch(() => exponentialBackoffDelay(retry, tries));
+        };
+
+        return this.ensureCounterExists.then(() => retry());
+    }
+
+    increment({maxTries = 10} = {}) {
         return this.add(1, {maxTries});
     }
 
-    decrement({maxTries = 10}) {
+    decrement({maxTries = 10} = {}) {
         return this.add(-1, {maxTries});
     }
 }
@@ -83,11 +103,11 @@ export class SimpleDbMutex {
         });
     }
 
-    lock({maxTries = 10, timeout = 10000} = {}) {
+    lock({maxTries = 10, ttl = 10000} = {}) {
         let tries = 0;
 
         const retry = () => {
-            if (maxTries >= 1 && (tries++ >= maxTries)) {
+            if ((tries++ >= maxTries) && maxTries >= 1) {
                 throw {error: 'Lock failed', reason: 'Maximum number of tries exceeded'};
             }
 
@@ -106,7 +126,7 @@ export class SimpleDbMutex {
                         ItemName: this.itemName,
                         Attributes: [
                             {Name: 'state', Value: 'locked', Replace: true},
-                            {Name: 'expires', Value: (Date.now() + timeout).toString(10), Replace: true},
+                            {Name: 'expires', Value: (Date.now() + ttl).toString(10), Replace: true},
                             {Name: 'counter', Value: (counter + 1).toString(10), Replace: true}
                         ],
                         Expected: {Exists: true, Name: 'counter', Value: counter.toString(10)}
@@ -114,7 +134,7 @@ export class SimpleDbMutex {
                 } else {
                     return Promise.reject();
                 }
-            }).catch(() => randomDelay(retry));
+            }).catch(() => exponentialBackoffDelay(retry, tries));
         };
 
         return this.ensureMutexExists.then(() => retry());
@@ -124,7 +144,7 @@ export class SimpleDbMutex {
         let tries = 0;
 
         const retry = () => {
-            if (maxTries >= 1 && (tries++ >= maxTries)) {
+            if ((tries++ >= maxTries) && maxTries >= 1) {
                 throw {error: 'Unlock failed', reason: 'Maximum number of tries exceeded'};
             }
 
@@ -149,21 +169,9 @@ export class SimpleDbMutex {
                 } else if (guard > counter) {
                     return Promise.reject();
                 }
-            }).catch(() => randomDelay(retry));
+            }).catch(() => exponentialBackoffDelay(retry, tries));
         };
 
         return this.ensureMutexExists.then(() => retry());
-    }
-}
-
-export class SimpleDbReadersWriterLock {
-    constructor(id, {timeout, domain}) {
-        this.timeout = timeout;
-        this.readLock = new SimpleDbMutex(`read-lock-${id}`, {domain});
-        this.globalLock = new SimpleDbMutex(`write-lock-${id}`, {domain});
-    }
-
-    beginRead() {
-
     }
 }
