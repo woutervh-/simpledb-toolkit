@@ -1,7 +1,13 @@
 import AWS from 'aws-sdk';
 
-const exponentialBackoffDelay = (fn, tries, initial = 10) => new Promise((resolve) => {
-    setTimeout(() => resolve(fn()), (1 + Math.random()) * initial * (2 ** tries));
+const exponentialBackoffDelay = (fn, tries, initial = 10) => new Promise((resolve, reject) => {
+    setTimeout(() => {
+        try {
+            resolve(fn());
+        } catch (error) {
+            reject(error);
+        }
+    }, (1 + Math.random()) * initial * (2 ** tries));
 });
 
 export class SimpleDbAtomicCounter {
